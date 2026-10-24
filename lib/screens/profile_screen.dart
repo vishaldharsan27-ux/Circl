@@ -7,6 +7,7 @@ import '../providers/theme_provider.dart';
 import '../providers/users_provider.dart';
 import '../theme/app_colors.dart';
 import 'register_screen.dart';
+import '../widgets/meteor_background.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -126,7 +127,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: AppBar(
         title: Text('Profile', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
       ),
-      body: user == null
+      body: MeteorBackground(child: user == null
           ? Center(
               child: Text('No profile data', style: TextStyle(color: AppColors.textMuted(context))),
             )
@@ -302,7 +303,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ],
               ),
-            ),
+            )),
     );
   }
 

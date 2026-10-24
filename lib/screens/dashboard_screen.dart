@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/project_model.dart';
 import '../providers/projects_provider.dart';
 import '../theme/app_colors.dart';
+import '../widgets/meteor_background.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -264,7 +265,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         title: Text('Dashboard', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
       ),
-      body: Consumer<ProjectsProvider>(
+      body: MeteorBackground(child: Consumer<ProjectsProvider>(
         builder: (context, provider, _) {
           if (provider.isLoading && provider.projects.isEmpty) {
             return const Center(
@@ -292,7 +293,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           );
         },
-      ),
+      )),
     );
   }
 

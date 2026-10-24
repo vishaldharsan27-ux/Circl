@@ -34,6 +34,10 @@ app.use('/api/users', usersRoutes);
 app.use('/api/pitch', pitchRoutes);
 app.use('/api/projects', projectsRoutes);
 
+// 3D constellation page, embedded by the app in a WebView (native) or iframe (web).
+// Its three.js / 3d-force-graph builds are vendored under vendor/ so it works offline.
+app.use('/constellation', express.static(path.join(__dirname, 'public', 'constellation')));
+
 const webBuildPath = path.join(__dirname, '..', 'build', 'web');
 app.use(express.static(webBuildPath));
 app.get(/^(?!\/api).*/, (req, res) => {

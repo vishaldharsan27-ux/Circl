@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/incoming_request_model.dart';
 import '../providers/connections_provider.dart';
 import '../theme/app_colors.dart';
+import '../widgets/meteor_background.dart';
 
 class RequestsScreen extends StatefulWidget {
   const RequestsScreen({super.key});
@@ -59,12 +60,12 @@ class _RequestsScreenState extends State<RequestsScreen> {
       appBar: AppBar(
         title: Text('Requests', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
       ),
-      body: RefreshIndicator(
+      body: MeteorBackground(child: RefreshIndicator(
         color: const Color(0xFF00E676),
         backgroundColor: AppColors.card(context),
         onRefresh: connectionsProvider.fetchIncomingRequests,
         child: _buildBody(connectionsProvider),
-      ),
+      )),
     );
   }
 

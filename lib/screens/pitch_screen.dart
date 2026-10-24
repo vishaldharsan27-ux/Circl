@@ -8,6 +8,7 @@ import '../providers/pitch_provider.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/meteor_background.dart';
 
 class PitchScreen extends StatefulWidget {
   final UserModel otherUser;
@@ -126,7 +127,7 @@ class _PitchScreenState extends State<PitchScreen> {
           style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
         ),
       ),
-      body: Consumer<PitchProvider>(
+      body: MeteorBackground(child: Consumer<PitchProvider>(
         builder: (context, provider, _) {
           if (provider.isLoading) {
             return const Center(
@@ -168,7 +169,7 @@ class _PitchScreenState extends State<PitchScreen> {
             ),
           );
         },
-      ),
+      )),
     );
   }
 

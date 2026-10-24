@@ -8,6 +8,42 @@ const { isPreferenceCompatible } = require('../utils/preferenceMatch');
 
 const router = express.Router();
 
+// Links between nearby users (not involving the requester) for the
+// constellation view: a pair is linked when their own interest match is at
+// least 30%, and each user keeps only their 2 strongest links so the graph
+// stays readable. `exact` = they share at least one tag (vs. category-only).
+const PEER_LINK_MIN_MATCH = 30;
+const PEER_LINKS_PER_USER = 2;
+
+function buildPeerLinks(users) {
+  const candidates = [];
+  for (let i = 0; i < users.length; i++) {
+    for (let j = i + 1; j < users.length; j++) {
+      const a = users[i];
+      const b = users[j];
+      const { matchPercent, sharedInterests } = calculateMatch(a.interests, b.interests);
+      if (matchPercent >= PEER_LINK_MIN_MATCH) {
+        candidates.push({
+          source: a.id.toString(),
+          target: b.id.toString(),
+          matchPercent,
+          exact: sharedInterests.length > 0
+        });
+      }
+    }
+  }
+
+  candidates.sort((x, y) => y.matchPercent - x.matchPercent);
+  const linkCount = {};
+  return candidates.filter((link) => {
+    if ((linkCount[link.source] || 0) >= PEER_LINKS_PER_USER) return false;
+    if ((linkCount[link.target] || 0) >= PEER_LINKS_PER_USER) return false;
+    linkCount[link.source] = (linkCount[link.source] || 0) + 1;
+    linkCount[link.target] = (linkCount[link.target] || 0) + 1;
+    return true;
+  });
+}
+
 function getDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -94,7 +130,7 @@ router.get('/nearby', authMiddleware, async (req, res) => {
 
     results.sort((a, b) => b.matchPercent - a.matchPercent);
 
-    res.json({ users: results });
+    res.json({ users: results, peerLinks: buildPeerLinks(results) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error while fetching nearby users' });

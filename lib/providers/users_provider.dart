@@ -9,6 +9,9 @@ class UsersProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
 
   List<UserModel> nearbyUsers = [];
+  // Interest links between nearby users (for the 3D constellation), as sent by
+  // GET /nearby: {source, target, matchPercent, exact}.
+  List<Map<String, dynamic>> peerLinks = [];
   bool isLoading = false;
   String? errorMessage;
 
@@ -29,9 +32,13 @@ class UsersProvider extends ChangeNotifier {
       nearbyUsers = (response['users'] as List)
           .map((json) => UserModel.fromJson(json))
           .toList();
+      peerLinks = (response['peerLinks'] as List? ?? [])
+          .map((link) => Map<String, dynamic>.from(link as Map))
+          .toList();
     } else {
       errorMessage = response['message'] ?? 'Failed to fetch nearby users';
       nearbyUsers = [];
+      peerLinks = [];
     }
 
     notifyListeners();

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../providers/users_provider.dart';
 import '../theme/app_colors.dart';
 import 'home_screen.dart';
+import '../widgets/meteor_background.dart';
 
 class InterestScreen extends StatefulWidget {
   const InterestScreen({super.key});
@@ -108,7 +109,7 @@ class _InterestScreenState extends State<InterestScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background(context),
-      body: SafeArea(
+      body: MeteorBackground(child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -226,7 +227,7 @@ class _InterestScreenState extends State<InterestScreen> {
             ],
           ),
         ),
-      ),
+      )),
     );
   }
 }

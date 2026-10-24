@@ -4,4 +4,8 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug only: lets a USB-connected phone reach the local backend over
+         plain http://localhost:5000 via `adb reverse tcp:5000 tcp:5000`.
+         Release builds keep Android's default HTTPS-only policy. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

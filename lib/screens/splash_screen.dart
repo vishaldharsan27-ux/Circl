@@ -7,6 +7,7 @@ import '../providers/auth_provider.dart';
 import '../theme/app_colors.dart';
 import 'home_screen.dart';
 import 'register_screen.dart';
+import '../widgets/meteor_background.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -41,7 +42,7 @@ class _SplashScreenState extends State<SplashScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background(context),
-      body: Center(
+      body: MeteorBackground(child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -70,7 +71,7 @@ class _SplashScreenState extends State<SplashScreen> {
             ).animate().fadeIn(duration: 600.ms, delay: 200.ms),
           ],
         ),
-      ),
+      )),
     );
   }
 }

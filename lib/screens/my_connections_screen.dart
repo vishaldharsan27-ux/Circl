@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/connections_provider.dart';
 import '../theme/app_colors.dart';
 import 'pitch_screen.dart';
+import '../widgets/meteor_background.dart';
 
 class MyConnectionsScreen extends StatefulWidget {
   const MyConnectionsScreen({super.key});
@@ -32,7 +33,7 @@ class _MyConnectionsScreenState extends State<MyConnectionsScreen> {
       appBar: AppBar(
         title: Text('Connections', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
       ),
-      body: Consumer<ConnectionsProvider>(
+      body: MeteorBackground(child: Consumer<ConnectionsProvider>(
         builder: (context, provider, _) {
           if (provider.isLoadingConnections && provider.acceptedConnections.isEmpty) {
             return const Center(
@@ -129,7 +130,7 @@ class _MyConnectionsScreenState extends State<MyConnectionsScreen> {
             ),
           );
         },
-      ),
+      )),
     );
   }
 }

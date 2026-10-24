@@ -5,12 +5,15 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/auth_provider.dart';
 import '../providers/connections_provider.dart';
 import '../providers/users_provider.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/constellation_view.dart';
+import '../widgets/meteor_background.dart';
 import '../widgets/user_card.dart';
 import 'dashboard_screen.dart';
 import 'my_connections_screen.dart';
@@ -37,9 +40,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _refreshTimer;
   DateTime? _lastLocationPushAt;
 
+  // 3D constellation vs. plain list; remembered across launches. If the 3D
+  // view fails to load (no WebGL, page unreachable) we fall back to the list.
+  static const _viewPrefKey = 'homeShow3D';
+  bool _show3D = true;
+  bool _constellationFailed = false;
+  final ConstellationController _constellation = ConstellationController();
+
   @override
   void initState() {
     super.initState();
+    _loadViewPreference();
     _initHome();
   }
 
@@ -48,7 +59,56 @@ class _HomeScreenState extends State<HomeScreen> {
     _positionSubscription?.cancel();
     _refreshTimer?.cancel();
     _socketService.disconnect();
+    _constellation.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _show3D = prefs.getBool(_viewPrefKey) ?? true);
+  }
+
+  Future<void> _toggleView() async {
+    setState(() {
+      _show3D = !_show3D;
+      if (_show3D) _constellationFailed = false;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_viewPrefKey, _show3D);
+  }
+
+  void _handleConstellationError(String message) {
+    if (!mounted || _constellationFailed) return;
+    setState(() => _constellationFailed = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$message. Showing the list instead.')),
+    );
+  }
+
+  void _handleNodeTap(String id, List<String> selectedInterests) {
+    if (id == 'me') {
+      Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const ProfileScreen()))
+          .whenComplete(_constellation.recenter);
+      return;
+    }
+
+    final users = Provider.of<UsersProvider>(context, listen: false).nearbyUsers;
+    final matches = users.where((u) => u.id == id);
+    if (matches.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: UserCard(user: matches.first, selectedInterests: selectedInterests),
+        ),
+      ),
+    ).whenComplete(_constellation.recenter);
   }
 
   Future<void> _initHome() async {
@@ -220,6 +280,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           IconButton(
+            icon: Icon(_show3D ? Icons.view_agenda_outlined : Icons.view_in_ar),
+            tooltip: _show3D ? 'List view' : '3D view',
+            onPressed: _toggleView,
+          ),
+          IconButton(
             icon: const Icon(Icons.people_outline),
             tooltip: 'Connections',
             onPressed: () {
@@ -278,17 +343,31 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        color: const Color(0xFF00E676),
-        backgroundColor: AppColors.card(context),
-        onRefresh: _handleRefresh,
-        child: _buildBody(usersProvider, selectedInterests),
-      ),
+      body: _show3D && !_constellationFailed && !_isLocating && _currentPosition != null
+          ? ConstellationView(
+              controller: _constellation,
+              payload: buildConstellationPayload(
+                me: authProvider.currentUser,
+                users: usersProvider.nearbyUsers,
+                peerLinks: usersProvider.peerLinks,
+              ),
+              onNodeTap: (id) => _handleNodeTap(id, selectedInterests),
+              onError: _handleConstellationError,
+            )
+          : MeteorBackground(
+              child: RefreshIndicator(
+                color: const Color(0xFF00E676),
+                backgroundColor: AppColors.card(context),
+                onRefresh: _handleRefresh,
+                child: _buildBody(usersProvider, selectedInterests),
+              ),
+            ),
     );
   }
 
   Widget _buildBody(UsersProvider usersProvider, List<String> selectedInterests) {
-    if (_isLocating || usersProvider.isLoading) {
+    // Only spin on the first load — the 20s background refresh shouldn't blank the list.
+    if (_isLocating || (usersProvider.isLoading && usersProvider.nearbyUsers.isEmpty)) {
       return ListView(
         children: const [
           SizedBox(height: 200),

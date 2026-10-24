@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Circl Constellation</title>
+<!--
+  3D "living constellation" of nearby users, embedded by lib/widgets/constellation_view*.dart.
+  The app owns all data (auth, /nearby polling, sockets) and pushes it in via
+  window.circl.update(payload); this page only draws, and reports taps back:
+    native (WebView): CirclBridge.postMessage(json)   web (iframe): parent.postMessage(json)
+  Payload: { me: {name, interests, preference, avatarColor},
+             users: [/nearby user objects], peerLinks: [/nearby peerLinks] }
+-->
+<style>
+  :root {
+    --bg: #0D0D0D; --card: rgba(26, 26, 26, 0.86); --line: rgba(232, 255, 240, 0.09);
+    --text: #F1F5F2; --muted: rgba(241, 245, 242, 0.64);
+    --green: #00E676; --yellow: #FFD740; --learn: #7CC4FF; --mentor: #C9A2F2;
+    --font: "Poppins", Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; -webkit-tap-highlight-color: transparent; user-select: none; }
+  #graph { position: absolute; inset: 0; }
+  .overlay { position: absolute; z-index: 2; }
+  .legend {
+    left: 12px; bottom: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 8px 12px; font-size: 11.5px; color: var(--muted); max-width: min(280px, calc(100% - 120px));
+  }
+  .legend summary { cursor: pointer; color: var(--text); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; list-style: none; }
+  .legend summary::-webkit-details-marker { display: none; }
+  .legend summary::after { content: " +"; color: var(--muted); }
+  .legend[open] summary::after { content: " –"; }
+  .legend ul { list-style: none; margin: 8px 0 2px; padding: 0; display: grid; gap: 6px; }
+  .legend li { display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: 8px; }
+  .sw { display: flex; justify-content: center; }
+  .sw-pic { width: 13px; height: 13px; border-radius: 50%; background: #FF8A65; box-shadow: 0 0 0 2px var(--green), 0 0 8px 2px rgba(0,230,118,.5); }
+  .sw-ring { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--yellow); }
+  .sw-line { width: 20px; height: 3px; border-radius: 2px; }
+  .bdg { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; font-size: 9px; font-weight: 700; color: #0D0D0D; }
+  .recenter {
+    right: 12px; bottom: 12px; background: var(--card); color: var(--text); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 14px; font: 500 13px var(--font); cursor: pointer;
+  }
+  .empty { left: 50%; top: 62%; transform: translateX(-50%); text-align: center; color: var(--muted); font-size: 14px; width: min(300px, 86%); line-height: 1.5; }
+  .empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<details class="overlay legend" id="legend" open>
+  <summary>Key</summary>
+  <ul>
+    <li><span class="sw"><span class="sw-pic"></span></span><span>Bigger, brighter = higher interest match</span></li>
+    <li><span class="sw"><span class="sw-ring"></span></span><span>Yellow ring = intent fits yours</span></li>
+    <li><span class="sw"><span class="sw-line" style="background:var(--green)"></span></span><span>Shared interest tag</span></li>
+    <li><span class="sw"><span class="sw-line" style="background:var(--yellow)"></span></span><span>Same area, different tags</span></li>
+    <li><span class="sw"><span class="bdg" style="background:var(--green)">B</span></span><span>Build · <b style="color:var(--learn)">L</b>earn · <b style="color:var(--mentor)">M</b>entor · <b style="color:var(--yellow)">H</b>ire</span></li>
+  </ul>
+</details>
+<button class="overlay recenter" id="recenter">Recenter</button>
+<div class="overlay empty" id="empty" hidden><b>No one nearby yet</b>People show up here as they come into range.</div>
+
+<script src="vendor/3d-force-graph.min.js"></script>
+<script type="module">
+  import * as THREE from './vendor/three.module.min.js';
+
+  const INTENT = {
+    Build: { letter: 'B', color: '#00E676' }, Learn: { letter: 'L', color: '#7CC4FF' },
+    Mentor: { letter: 'M', color: '#C9A2F2' }, Hire: { letter: 'H', color: '#FFD740' },
+  };
+  const NO_INTENT = { letter: '?', color: '#9E9E9E' };
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const isNarrow = () => innerWidth <= 600;
+  const $ = id => document.getElementById(id);
+  const initials = n => String(n || '?').split(' ').filter(Boolean).map(p => p[0]).join('').slice(0, 2).toUpperCase();
+
+  // ---------- Bridge to the Flutter app ----------
+  function send(msg) {
+    const s = JSON.stringify(msg);
+    if (window.CirclBridge) window.CirclBridge.postMessage(s);
+    else if (window.parent !== window) window.parent.postMessage(s, location.origin);
+  }
+  addEventListener('message', e => {
+    if (e.origin !== location.origin || typeof e.data !== 'string') return;
+    try {
+      const m = JSON.parse(e.data);
+      if (m.type === 'update') window.circl.update(m.payload);
+      if (m.type === 'recenter') window.circl.recenter();
+    } catch {}
+  });
+
+  // ---------- State ----------
+  let me = { id: 'me', isMe: true, name: 'You', interests: [], preference: null, avatarColor: '#00E676', fx: 0, fy: 0, fz: 0 };
+  let nodes = [me];
+  let selected = null;
+  let Graph = null;
+
+  // ---------- Textures ----------
+  const glowTex = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.25, 'rgba(255,255,255,.45)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
+  })();
+  const ringTex = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const g = c.getContext('2d');
+    g.strokeStyle = '#FFD740'; g.lineWidth = 9; g.shadowColor = '#FFD740'; g.shadowBlur = 14;
+    g.beginPath(); g.arc(128, 128, 104, 0, Math.PI * 2); g.stroke();
+    return new THREE.CanvasTexture(c);
+  })();
+  function shade(hex, amt) {
+    const n = parseInt(String(hex).replace('#', ''), 16) || 0x00E676;
+    const f = v => Math.max(0, Math.min(255, Math.round(v + (amt < 0 ? v * amt : (255 - v) * amt))));
+    return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+  }
+  // Profile picture: avatar initials on the user's colour, rimmed green by match strength
+  function avatarTexture(node, m) {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const g = c.getContext('2d');
+    const color = node.avatarColor || '#00E676';
+    g.fillStyle = node.isMe ? 'rgba(255,255,255,0.95)' : `rgba(0,230,118,${(0.35 + 0.65 * m / 100).toFixed(2)})`;
+    g.beginPath(); g.arc(128, 128, 124, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#0D0D0D'; g.beginPath(); g.arc(128, 128, 112, 0, Math.PI * 2); g.fill();
+    const grd = g.createRadialGradient(100, 90, 10, 128, 128, 108);
+    grd.addColorStop(0, color); grd.addColorStop(1, shade(color, -0.35));
+    g.fillStyle = grd; g.beginPath(); g.arc(128, 128, 106, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#0D0D0D'; g.font = '600 92px Poppins, Roboto, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(initials(node.name), 128, 136);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  function labelTexture(node) {
+    const name = node.isMe ? 'You' : node.name;
+    const sub = node.isMe ? (node.preference ? `Looking to ${node.preference}` : 'You')
+      : node.connectionStatus === 'accepted' ? `${node.matchPercent}% · connected`
+      : `${node.matchPercent}% · ${Number(node.distanceKm || 0).toFixed(1)} km`;
+    const c = document.createElement('canvas'); const g = c.getContext('2d');
+    g.font = '600 42px Poppins, Roboto, sans-serif'; const w1 = g.measureText(name).width;
+    g.font = '500 30px Poppins, Roboto, sans-serif'; const w2 = g.measureText(sub).width;
+    c.width = Math.ceil(104 + Math.max(w1, w2) + 16); c.height = 128;
+    const i = INTENT[node.preference] || NO_INTENT;
+    g.fillStyle = i.color; g.beginPath(); g.arc(50, 64, 34, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#0D0D0D'; g.font = '700 36px Poppins, Roboto, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(i.letter, 50, 66);
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillStyle = '#F1F5F2'; g.font = '600 42px Poppins, Roboto, sans-serif'; g.fillText(name, 100, 56);
+    g.fillStyle = node.isMe || node.connectionStatus === 'accepted' ? '#00E676' : 'rgba(241,245,242,.62)';
+    g.font = '500 30px Poppins, Roboto, sans-serif'; g.fillText(sub, 100, 102);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    return { tex, aspect: c.width / c.height };
+  }
+
+  const dim = new THREE.Color('#2B4A3B'), bright = new THREE.Color('#00E676');
+  function buildNode(node) {
+    const m = node.isMe ? 100 : (node.matchPercent || 0);
+    const r = node.isMe ? 7 : 2.4 + m * 0.065;
+    const col = node.isMe ? bright : dim.clone().lerp(bright, m / 100);
+    const group = new THREE.Group();
+
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: col, transparent: true, opacity: node.isMe ? 0.75 : 0.15 + 0.55 * m / 100,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    halo.scale.setScalar(r * (node.isMe ? 7 : 5.5));
+    group.add(halo);
+
+    const pic = new THREE.Sprite(new THREE.SpriteMaterial({ map: avatarTexture(node, m), transparent: true, depthWrite: false }));
+    pic.scale.setScalar(r * 2.5); pic.renderOrder = 5;
+    group.add(pic);
+
+    if (!node.isMe && node.preferenceMatch) {
+      const ring = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex, transparent: true, depthWrite: false }));
+      ring.scale.setScalar(r * 3.3);
+      group.add(ring);
+    }
+
+    const { tex, aspect } = labelTexture(node);
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    const h = node.isMe ? 9 : 7;
+    label.scale.set(h * aspect, h, 1); label.center.set(0.5, 0); label.position.y = r + 2.5; label.renderOrder = 10;
+    group.add(label);
+
+    node.__group = group;
+    return group;
+  }
+
+  // ---------- Links ----------
+  function buildLinks() {
+    const mine = new Set(me.interests);
+    const links = nodes.filter(n => !n.isMe).map(n => ({
+      source: 'me', target: n.id, kind: 'you', score: n.matchPercent || 0,
+      exact: (n.interests || []).some(t => mine.has(t)),
+    }));
+    const ids = new Set(nodes.map(n => n.id));
+    for (const l of peerLinks) {
+      if (ids.has(l.source) && ids.has(l.target)) links.push({ source: l.source, target: l.target, kind: 'peer', score: l.matchPercent, exact: !!l.exact });
+    }
+    return links;
+  }
+  let peerLinks = [];
+  const linkTouches = (l, id) => (l.source.id ?? l.source) === id || (l.target.id ?? l.target) === id;
+  function linkColor(l) {
+    let a = l.kind === 'you' ? 0.14 + l.score / 130 : 0.16 + l.score / 300;
+    if (selected && !linkTouches(l, selected.id)) a *= 0.25;
+    if (selected && linkTouches(l, selected.id)) a = Math.min(1, a * 1.8);
+    return l.exact ? `rgba(0,230,118,${a.toFixed(3)})` : `rgba(255,215,64,${a.toFixed(3)})`;
+  }
+
+  // ---------- Camera ----------
+  const homeDistance = () => {
+    const aspect = innerWidth / Math.max(1, innerHeight);
+    return aspect < 1 ? 330 * Math.min(2.1, 0.85 / aspect) : 330;
+  };
+  const recenter = (ms = 900) => { selected = null; if (Graph) { Graph.linkColor(Graph.linkColor()); Graph.cameraPosition({ x: 0, y: 70, z: homeDistance() }, { x: 0, y: 0, z: 0 }, ms); } };
+  function flyTo(node) {
+    // Aim a little below the node on phones, since the app's profile sheet covers the lower half
+    const drop = isNarrow() ? 22 : 0;
+    if (node.isMe) { Graph.cameraPosition({ x: 0, y: 25, z: 110 }, { x: 0, y: -drop, z: 0 }, 1000); return; }
+    const d = Math.hypot(node.x, node.y, node.z) || 1;
+    const ratio = 1 + 70 / d;
+    Graph.cameraPosition({ x: node.x * ratio, y: node.y * ratio + 10, z: node.z * ratio }, { x: node.x, y: node.y - drop, z: node.z }, 1000);
+  }
+
+  // ---------- Public API used by the app ----------
+  window.circl = {
+    update(payload) {
+      if (!payload) return;
+      if (payload.me) Object.assign(me, { name: payload.me.name || 'You', interests: payload.me.interests || [], preference: payload.me.preference || null, avatarColor: payload.me.avatarColor || '#00E676' });
+      peerLinks = payload.peerLinks || [];
+      const prev = new Map(nodes.filter(n => !n.isMe).map(n => [n.id, n]));
+      const next = (payload.users || []).map(u => {
+        const id = String(u.id);
+        const old = prev.get(id);
+        if (old) {
+          if (old.connectionStatus !== u.connectionStatus) old.__pulse = performance.now();
+          return Object.assign(old, u, { id });
+        }
+        // New arrivals fly in from the edge of the sky
+        const a = Math.random() * Math.PI * 2;
+        return Object.assign({ x: 260 * Math.cos(a), y: (Math.random() - 0.5) * 120, z: 260 * Math.sin(a), __pulse: prev.size ? performance.now() : 0 }, u, { id });
+      });
+      nodes = [me, ...next];
+      $('empty').hidden = next.length > 0;
+      if (selected && !nodes.includes(selected)) selected = null;
+      if (Graph) {
+        Graph.nodeThreeObject(n => buildNode(n));
+        Graph.graphData({ nodes, links: buildLinks() });
+      }
+    },
+    recenter() { recenter(); },
+  };
+
+  // ---------- Scene ----------
+  function init() {
+    const el = $('graph');
+    Graph = new ForceGraph3D(el, { controlType: 'orbit' })
+      .width(innerWidth).height(innerHeight)
+      .backgroundColor('#0D0D0D')
+      .showNavInfo(false)
+      .enableNodeDrag(false)
+      .nodeLabel(() => '')
+      .nodeThreeObject(n => buildNode(n))
+      .linkVisibility(l => l.score > 0)
+      .linkColor(linkColor)
+      .linkOpacity(1)
+      .linkWidth(l => l.kind === 'you' ? 0.25 + l.score / 40 : 0.2 + l.score / 140)
+      .linkDirectionalParticles(l => (l.kind === 'you' && l.score >= 45 && !reduceMotion) ? 2 : 0)
+      .linkDirectionalParticleWidth(1.8)
+      .linkDirectionalParticleColor(l => l.exact ? '#00E676' : '#FFD740')
+      .linkDirectionalParticleSpeed(l => 0.0025 + l.score / 40000)
+      .warmupTicks(80)
+      .onNodeClick(n => {
+        selected = n;
+        Graph.linkColor(Graph.linkColor());
+        flyTo(n);
+        send({ type: 'tap', id: n.id });
+      })
+      .onBackgroundClick(() => { if (selected) recenter(); })
+      .graphData({ nodes, links: buildLinks() });
+
+    Graph.d3Force('link')
+      .distance(l => l.kind === 'you' ? 38 + (100 - l.score) * 1.35 : 70)
+      .strength(l => l.kind === 'you' ? 0.9 : 0.04);
+    Graph.d3Force('charge').strength(-110);
+
+    const starGeo = new THREE.BufferGeometry();
+    const pts = new Float32Array(1500 * 3);
+    for (let i = 0; i < 1500; i++) {
+      const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, rad = 700 + Math.random() * 900, s = Math.sqrt(1 - u * u);
+      pts.set([rad * s * Math.cos(th), rad * u, rad * s * Math.sin(th)], i * 3);
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+    const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: '#A9C2B3', size: 2, sizeAttenuation: true, transparent: true, opacity: 0.55, depthWrite: false }));
+    Graph.scene().add(stars);
+    recenter(0);
+
+    // Idle auto-orbit, paused while the user is touching the scene or looking at someone
+    let idleUntil = performance.now() + 1500;
+    const poke = () => { idleUntil = performance.now() + 6000; };
+    ['pointerdown', 'wheel', 'touchstart'].forEach(ev => el.addEventListener(ev, poke, { passive: true }));
+    (function tick(now) {
+      if (!reduceMotion && !selected && now > idleUntil) {
+        const p = Graph.camera().position;
+        const d = Math.hypot(p.x, p.z), a = Math.atan2(p.x, p.z) + 0.0016;
+        Graph.cameraPosition({ x: d * Math.sin(a), y: p.y, z: d * Math.cos(a) }, { x: 0, y: 0, z: 0 });
+      }
+      stars.rotation.y += 0.00008;
+      for (const n of nodes) {
+        if (!n.__pulse || !n.__group) continue;
+        const t = (now - n.__pulse) / 1100;
+        if (t >= 1) { n.__group.scale.setScalar(1); n.__pulse = 0; }
+        else n.__group.scale.setScalar(1 + 0.55 * Math.sin(t * Math.PI));
+      }
+      requestAnimationFrame(tick);
+    })(performance.now());
+
+    addEventListener('resize', () => Graph.width(innerWidth).height(innerHeight));
+  }
+
+  $('recenter').onclick = () => recenter();
+  if (isNarrow()) $('legend').open = false;
+
+  try {
+    const c = document.createElement('canvas');
+    if (!(c.getContext('webgl2') || c.getContext('webgl'))) throw new Error('This device can’t draw 3D graphics.');
+    if (typeof ForceGraph3D === 'undefined') throw new Error('The 3D library didn’t load.');
+    init();
+    send({ type: 'ready' });
+  } catch (err) {
+    send({ type: 'error', message: err.message });
+  }
+</script>
+</body>
+</html>
